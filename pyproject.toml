@@ -1,0 +1,23 @@
+[project]
+name = "sabana_agent_rl"
+version = "0.1.0"
+description = "DQN investing agent (0% / 50% / 100% allocation) evaluated on held-out data against buy & hold and random baselines."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy>=1.24,<2.5",          # gym-trading-env downloader breaks with numpy 2.5
+    "pandas>=2.0,<3.0",          # and with pandas 3
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "gymnasium>=0.29",
+    "torch>=2.1",
+    "gym-trading-env>=0.3.5",    # only used to download the data
+    "jupyter",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]

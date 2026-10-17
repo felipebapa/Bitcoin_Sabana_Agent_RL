@@ -1,0 +1,50 @@
+# sabana_agent_rl - single source of truth.
+# Todos los hiperparámetros están fijos antes de mirar el período mantenido (test).
+
+seeds: [0, 1, 2]                 # cada RL run es repetido con estas semillas
+
+data:
+  exchange: binance              # gym-trading-env downloader
+  symbol: BTC/USDT
+  timeframe: 1h
+  since: "2019-01-01"
+  path: data/binance-BTCUSDT-1h.pkl   # .pkl (downloader) or .csv (professor dataset)
+  train_end: "2023-12-31"        # train:      since      -> train_end
+  val_end: "2024-12-31"          # validation: train_end  -> val_end (model/reward selection)
+                                 # test:       val_end    -> last bar (held-out, used ONCE)
+
+features:                        # windows are in bars (1 bar = 1 hour)
+  short_window: 24               # 1 day: short-term momentum and volatility
+  long_window: 168               # 1 week: trend reference (moving average)
+  rsi_window: 14                 # standard RSI length
+
+env:
+  initial_value: 100000
+  positions: [0.0, 0.5, 1.0]     # action i -> fraction of capital invested
+  fee: 0.001                     # 10 bps charged on the traded notional
+  episode_length: 720            # training episodes: random 30-day windows
+  reward_scale: 100              # hourly log returns are ~1e-3; scaling helps DQN
+
+rewards:                         # reward versions compared on validation
+  log_return: {}                                              # v1: pure growth
+  drawdown_penalty: {dd_penalty: 2.0}                         # v2: kept as reward-hacking evidence
+  dd_turnover: {dd_penalty: 0.5, turnover_penalty: 0.001}     # v3: mild risk aversion + anti-churn
+  dd_light: {dd_penalty: 0.1, turnover_penalty: 0.001}        # v4: very mild risk aversion
+
+final_reward: dd_light         # set ONLY after comparing versions on validation
+
+dqn:
+  net_arch: [64, 64]
+  learning_rate: 0.0001
+  batch_size: 64
+  gamma: 0.95
+  buffer_size: 50000
+  learning_starts: 2000
+  train_freq: 4
+  target_update_interval: 2000
+  exploration_initial_eps: 1.0
+  exploration_final_eps: 0.05
+  exploration_fraction: 0.3
+  total_timesteps: 200000        # upper bound; early stopping may end sooner
+  eval_freq: 10000               # validation check every N steps
+  patience: 5                    # stop after N validation checks without improvement

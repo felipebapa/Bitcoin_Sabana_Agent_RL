@@ -1,0 +1,276 @@
+Metadata-Version: 2.4
+Name: sabana_agent_rl
+Version: 0.1.0
+Summary: DQN investing agent (0% / 50% / 100% allocation) evaluated on held-out data against buy & hold and random baselines.
+Requires-Python: <3.13,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy<2.5,>=1.24
+Requires-Dist: pandas<3.0,>=2.0
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: gymnasium>=0.29
+Requires-Dist: torch>=2.1
+Requires-Dist: gym-trading-env>=0.3.5
+Requires-Dist: jupyter
+
+# sabana_agent_rl
+
+Este repositorio contiene un agente de Reinforcement Learning (DQN) que decide, cada hora, qué fracción de un portafolio de $100.000 invertir en Bitcoin (BTC/USDT): **0 %, 50 % o 100 %**.
+
+El agente se entrena con datos históricos y se evalúa en un período no visto (*held-out*) contra **comprar y mantener** (*buy & hold*) y un **agente aleatorio**, con los mismos costos de transacción.
+
+> **Pregunta central:** ¿Puede un agente de RL aprender una estrategia de inversión que se comporte mejor que estrategias simples cuando se enfrenta a datos que no vio durante su entrenamiento?
+
+El objetivo no es solo maximizar el retorno: se evalúan en conjunto **rendimiento, riesgo (drawdown) y costos**.
+
+> **Respuesta corta:** en el período de test (ene 2025 – oct 2026, mercado bajista), el agente final (`dd_light`, promedio de 3 semillas) ganó **+22,6 %** con un drawdown máximo de **-15,6 %**. En el mismo período, comprar y mantener perdió **-13,7 %** con un drawdown de **-53,7 %**. El resultado depende mucho de la semilla (ver sección 10).
+
+> 📊 **Se recomienda revisar primero el EDA** (`notebooks/eda.ipynb`): ahí se justifican las features, las ventanas y el diseño de la recompensa.
+
+---
+
+## 1. Estructura del repositorio
+
+```
+sabana_agent_rl/
+├── configs/default.yaml      # todos los parámetros del experimento (datos, entorno, recompensas, DQN, semillas)
+├── data/                     # dataset descargado (.pkl) - no versionado
+├── notebooks/eda.ipynb       # análisis exploratorio (solo train + validación) y visual del split temporal
+├── src/
+│   ├── data.py               # descarga, features, split temporal, normalización con train, chequeo de lookahead
+│   ├── environment.py        # entorno de inversión compatible con Gymnasium (costos, recompensas, timing)
+│   ├── agent.py              # DQN propio en PyTorch + ensamble de semillas (promedio de valores Q)
+│   ├── train.py              # entrenamiento + early stopping sobre validación
+│   ├── evaluate.py           # métricas, curvas de capital, posiciones, logs por paso
+│   ├── baselines.py          # comprar y mantener, agente aleatorio
+│   └── benchmark_25.py       # benchmark descriptivo: 25 % fijo en BTC (calculado después del test)
+├── models/                   # modelos entrenados (los crea train.py)
+├── results/                  # métricas, gráficos y logs por split (los crea evaluate.py)
+├── REPORT.md                 # informe
+└── pyproject.toml
+```
+
+## 2. Instalación
+
+Python 3.10 - 3.12.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+Se fijan `numpy<2.5` y `pandas<3` porque el descargador de `gym-trading-env` falla con versiones más nuevas.
+
+## 3. Cómo correr el experimento
+
+| Paso | Comando | Qué hace |
+|---|---|---|
+| 1 | `python -m src.data` | Descarga velas de 1 h de BTC/USDT (Binance, desde 2019) en `data/`, corre el chequeo de lookahead e imprime las fechas del split. |
+| 2 | `jupyter notebook notebooks/eda.ipynb` | Análisis exploratorio sobre train + validación. Muestra el split temporal. |
+| 3 | `python -m src.train` | Entrena 4 versiones de recompensa × 3 semillas = 12 modelos DQN en `models/`. |
+| 4 | `python -m src.evaluate --split val` | Compara recompensas, semillas y el ensamble en **validación**. |
+| 5 | Editar `final_reward` en `configs/default.yaml` | Elegir la recompensa usando **solo** los resultados de validación. |
+| 6 | `python -m src.evaluate --split test` | **Evaluación final en held-out. Se corre una sola vez. No se ajusta nada después.** |
+| 7 | `python -m src.benchmark_25` | Benchmark descriptivo con exposición equivalente (25 % fijo). No cambia ninguna decisión. |
+
+Entrenar una sola versión: `python -m src.train --reward dd_light` (las 3 semillas) o `python -m src.train --reward dd_light --seed 1`.
+
+Los resultados se guardan con el nombre del split (`metrics_val.csv`, `metrics_test.csv`, `equity_val.png`, etc.), así que correr el test no sobrescribe la validación.
+
+## 4. Datos
+
+| Ítem | Valor |
+|---|---|
+| Fuente | Binance vía `gym_trading_env.downloader` |
+| Activo / frecuencia | BTC/USDT, velas de 1 hora (OHLCV) |
+| Archivo | `data/binance-BTCUSDT-1h.pkl` |
+| Train | 2019-01-01 -> 2023-12-31 |
+| Validación | 2024-01-01 -> 2024-12-31 |
+| Test (held-out) | 2025-01-01 -> última vela descargada |
+
+**¿Por qué desde 2019?** El período de entrenamiento cubre varios regímenes de mercado (subida 2020-2021, caída 2022, recuperación 2023) con suficientes datos para un DQN pequeño, y deja fuera 2017-2018, cuya estructura de mercado es muy distinta a la actual. El costo es perder el ciclo de auge y caída de 2017-2018.
+
+### Hallazgos principales del EDA (solo train + validación)
+
+| Observación | Dato | Implicancia para el diseño |
+|---|---|---|
+| Velas analizadas | 52.375 (2019-01-08 → 2024-12-31) | Datos suficientes para un DQN pequeño |
+| Retorno horario | media ≈ 0,006 %, desv. 0,71 % | La señal es muy pequeña frente al ruido: se escala la recompensa ×100 |
+| Colas pesadas | asimetría -0,83, curtosis en exceso 48,4 | Hay caídas bruscas y poco frecuentes: justifica penalizar el drawdown |
+| Autocorrelación lag-1 | -0,018 | El retorno de la hora anterior casi no predice el siguiente: se agregan features de tendencia y volatilidad |
+| Regímenes de volatilidad | el 5 % de horas más volátiles se concentra en 2021 (1.194 h) y 2019 (634 h) | La volatilidad cambia por régimen: se incluye como feature |
+| Máximo drawdown del activo | **-77,2 %** (nov. 2022) | Comprar y mantener puede sufrir pérdidas enormes |
+| Retornos anuales | 2020 +302 %, 2021 +60 %, 2022 -64 %, 2023 +156 %, 2024 +121 % | Mercado mayormente alcista, con un año muy bajista en train |
+| Volumen | no estacionario (cambios estructurales de cuota de mercado) | **No** se usa como feature |
+
+## 5. Formulación del problema
+
+**Estado (6 valores)**, todos calculados con cierres hasta *t*:
+
+| Feature | Definición | Por qué |
+|---|---|---|
+| `ret_1` | retorno logarítmico de la última hora | movimiento más reciente |
+| `ret_short` | retorno logarítmico de 24 h | momentum de corto plazo |
+| `ma_gap` | close / SMA(168 h) - 1 | posición frente a la tendencia semanal |
+| `volatility` | desviación estándar de los retornos horarios en 24 h | nivel de riesgo actual |
+| `rsi` | RSI(14) reescalado a [-1, 1] | sobrecompra / sobreventa |
+| `position` | fracción invertida actual | necesaria para razonar sobre el costo de cambiar |
+
+Las features se estandarizan (z-score) con **media y desviación estándar solo de train**, y se recortan a ±5.
+
+**Acciones:** `0 -> 0 %`, `1 -> 50 %`, `2 -> 100 %` del capital. Solo posiciones largas, sin apalancamiento ni ventas en corto.
+
+**Timing:** se decide al cierre de *t*, se opera al cierre de *t* (si la acción cambió) y se valora al cierre de *t+1*.
+
+**Costos:** 10 bps sobre el monto operado, solo cuando cambia la posición:
+
+$$c_t = 0{,}001 \cdot |w_t - w_{t-1}| \cdot V_t$$
+
+## 6. Recompensas
+
+Todas las versiones comparten la misma base: el retorno logarítmico del portafolio **neto de costos**, escalado ×100 porque los retornos horarios son del orden de $10^{-3}$.
+
+Definiciones:
+
+- $V_t$: valor del portafolio al cierre de *t* (ya descontados los costos).
+- $w_t$: fracción invertida elegida en *t*.
+- $DD_t = 1 - V_t / \max_{s \le t} V_s$: drawdown actual (0 en un máximo, positivo en una caída).
+- $\Delta DD_t^{+} = \max(0,\ DD_{t+1} - DD_t)$: cuánto se **profundizó** el drawdown en el paso.
+
+Forma general:
+
+$$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - \lambda_{dd}\, \Delta DD_t^{+} - \lambda_{to}\, |w_t - w_{t-1}| \right]$$
+
+| Versión | $\lambda_{dd}$ | $\lambda_{to}$ | Comportamiento buscado |
+|---|---|---|---|
+| v1 `log_return` | 0 | 0 | maximizar el crecimiento neto de costos |
+| v2 `drawdown_penalty` | 2,0 | 0 | lo mismo, pero las pérdidas que profundizan el drawdown pesan más |
+| v3 `dd_turnover` | 0,5 | 0,001 | aversión moderada al riesgo + freno a operar de más |
+| v4 `dd_light` | 0,1 | 0,001 | aversión muy suave al riesgo + freno a operar de más |
+
+Ecuación de cada versión:
+
+**v1 `log_return`**
+
+$$r_t = 100 \cdot \log\frac{V_{t+1}}{V_t}$$
+
+**v2 `drawdown_penalty`**
+
+$$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - 2\, \Delta DD_t^{+} \right]$$
+
+**v3 `dd_turnover`**
+
+$$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - 0{,}5\, \Delta DD_t^{+} - 0{,}001\, |w_t - w_{t-1}| \right]$$
+
+**v4 `dd_light`** (agente final)
+
+$$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - 0{,}1\, \Delta DD_t^{+} - 0{,}001\, |w_t - w_{t-1}| \right]$$
+
+**Iteración del diseño:** v1 operó en exceso (304 operaciones en validación). v2 hizo *reward hacking*: se quedó en efectivo para no sufrir penalizaciones. v3 redujo la penalización, pero siguió casi siempre fuera del mercado. v4 suavizó la penalización hasta lograr un agente que entra en tramos de tendencia y paga pocos costos.
+
+## 7. Algoritmo
+
+DQN implementado en PyTorch. Los hiperparámetros se fijan a priori en `configs/default.yaml`:
+
+| Parámetro | Valor |
+|---|---|
+| Red | MLP 2 × 64 |
+| Learning rate | 0,0001 |
+| Batch size | 64 |
+| γ (descuento) | 0,95 |
+| Replay buffer | 50.000 |
+| Inicio del aprendizaje | 2.000 pasos |
+| Frecuencia de entrenamiento | cada 4 pasos |
+| Actualización de la red objetivo | cada 2.000 pasos |
+| Exploración ε | 1,0 -> 0,05 en el primer 30 % de los pasos |
+| Pasos máximos | 200.000 |
+| Early stopping | evaluación en validación cada 10.000 pasos, paciencia 5 |
+| Episodios de entrenamiento | ventanas aleatorias de 720 h (30 días) |
+| Semillas | 0, 1, 2 |
+
+**Ensamble:** además de cada semilla por separado, se evalúa un ensamble de las 3 semillas de `final_reward`, que promedia sus valores Q y elige la acción con mayor promedio.
+
+## 8. Protocolo de evaluación y control de sobreajuste
+
+```
+2019 ─────────── 2023 │ 2024 │ 2025 ──────── 2026
+      TRAIN            │ VAL  │ TEST (held-out)
+  el agente aprende    │ checkpoint + elección de recompensa
+                              │ evaluación final, una sola vez
+```
+
+1. **Split temporal estricto:** el test nunca se usa para entrenar, elegir checkpoints, elegir la recompensa ni para el EDA.
+2. **Normalización** con estadísticas solo de train.
+3. **Features sin escala de precio** (retornos y ratios), para que el agente no memorice niveles de precio.
+4. **Episodios aleatorios de 30 días** en lugar de una única secuencia fija.
+5. **Red pequeña** (2 × 64) y **early stopping** sobre validación.
+6. **3 semillas** por configuración. El resultado principal es el promedio de semillas, no la mejor.
+7. **Hiperparámetros fijados a priori**; no se ajusta nada con el test.
+8. **Chequeo automático de lookahead** (`check_no_lookahead`).
+9. **Regla de decisión fijada antes de correr el test** (sección 9).
+
+**Métricas reportadas:** retorno acumulado, máximo drawdown, Sharpe, costos de transacción ($), número de operaciones y exposición promedio, además de curvas de capital y posiciones del agente en el tiempo. El agente aleatorio es el promedio de 20 corridas. Todas las estrategias corren en el mismo entorno, período y con los mismos costos.
+
+## 9. Resultados en validación (2024) y elección del agente final
+
+Promedio de 3 semillas:
+
+| Estrategia | Retorno | Máx. DD | Sharpe | Operaciones | Costos | Exposición |
+|---|---|---|---|---|---|---|
+| Comprar y mantener | +120 % | -32,3 % | 1,76 | 1 | $100 | 100 % |
+| v1 `log_return` | +122 % | -21,8 % | 2,05 | 304 | $27.404 | 75 % |
+| v2 `drawdown_penalty` | +12 % | -1,5 % | 1,81 | 12 | $901 | 0,1 % |
+| v3 `dd_turnover` | +12 % | -3,2 % | 1,53 | 20 | $1.378 | 0,3 % |
+| **v4 `dd_light`** | +69 % | **-11,6 %** | **2,06** | 48 | $4.169 | 23 % |
+| v4 `dd_light`, ensamble | +20 % | -13,4 % | 1,03 | 28 | $1.992 | 9 % |
+
+![Curva de capital - validación](results/equity_val.png)
+
+![Posiciones por recompensa - validación](results/positions_val.png)
+
+Principales observaciones:
+- v2 y v3 hacen *reward hacking*: se quedan casi siempre en efectivo para evitar la penalización por drawdown (ver posiciones planas en el gráfico).
+- v1 iguala el retorno de comprar y mantener con menor drawdown, pero opera en exceso y paga costos altos.
+- v4 aprende una estrategia intermedia: entra en tramos de tendencia y sale en tramos laterales, con el mismo Sharpe que v1, la mitad de drawdown y un 85 % menos de costos.
+- El ensamble queda por debajo de las tres semillas individuales: al promediar los valores Q, las señales de entrada no coinciden y domina quedarse en efectivo.
+
+**Agente final (fijado antes de correr el test):** DQN con recompensa `dd_light`, 3 semillas, reportado como promedio y rango. **Criterio:** con Sharpe empatado frente a `log_return` en validación, se priorizan menor drawdown y menores costos, como pide el enunciado. El ensamble y las demás recompensas se reportan solo como comparación.
+
+## 10. Resultados en test (held-out: ene 2025 – oct 2026)
+
+| Estrategia | Retorno | Máx. DD | Sharpe | Operaciones | Costos | Exposición |
+|---|---|---|---|---|---|---|
+| Comprar y mantener | -13,7 % | -53,7 % | 0,03 | 1 | $100 | 100 % |
+| Aleatorio (20 corridas) | -99,9 % | -99,9 % | — | 10.464 | $102.399 | 50 % |
+| 25 % fijo en BTC *(descriptivo)* | -3,4 % | -16,5 % | -0,13 | 1 | $25 | 24 %* |
+| **`dd_light`, promedio 3 semillas** | **+22,6 %** | **-15,6 %** | **0,48** | 42 | $2.798 | 25 % |
+| `dd_light` s0 | +56,2 % | -23,5 % | 0,96 | 48 | $3.237 | 58 % |
+| `dd_light` s1 | +0,2 % | -7,0 % | 0,05 | 24 | $1.352 | 1 % |
+| `dd_light` s2 | +11,3 % | -16,2 % | 0,44 | 54 | $3.806 | 16 % |
+| `dd_light`, ensamble | +1,7 % | -14,1 % | 0,14 | 32 | $1.982 | 11 % |
+
+\* El benchmark del 25 % compra una sola vez y no rebalancea; su exposición baja a medida que cae el precio de BTC. Se calculó **después** del test, solo con fines descriptivos, y no influyó en ninguna decisión.
+
+![Curva de capital - test](results/equity_test.png)
+
+![Curva de capital - test con benchmark de exposición equivalente](results/equity_test_with_benchmark.png)
+
+![Posiciones de la semilla s0 - test](results/positions_test.png)
+
+Interpretación:
+- **Le gana a comprar y mantener en las tres dimensiones:** retorno (+22,6 % frente a -13,7 %), riesgo (drawdown 3,5 veces menor) y Sharpe (0,48 frente a 0,03).
+- **La ventaja no es solo "estar poco invertido".** Con la misma exposición promedio (~25 %), el benchmark fijo pierde -3,4 % con un drawdown parecido (-16,5 %). El agente gana +22,6 %, lo que indica que elige cuándo entrar.
+- **El comportamiento es consistente con validación:** en un mercado alcista (2024) rinde menos que comprar y mantener; en un mercado bajista (test) lo supera. Es una estrategia defensiva.
+- **Alta dependencia de la semilla:** el rango va de +0,2 % a +56,2 %. s0 explica la mayor parte del promedio y concentra su ganancia en pocas operaciones (entrada a fines de junio de 2026, mantenida en la subida de agosto). s1 casi no invierte (1 % de exposición), un comportamiento cercano al *reward hacking* de v2 y v3.
+- **El ensamble vuelve a fallar**, igual que en validación.
+- **El agente aleatorio pierde todo por costos** (más de 10.000 operaciones), lo que confirma que el costo de transacción está bien aplicado.
+
+**Limitación:** es un único período de test con 3 semillas, así que el resultado no es estadísticamente concluyente.
+
+## 11. Reproducibilidad
+
+- Semillas `[0, 1, 2]` fijadas para NumPy, PyTorch, el DQN y el entorno.
+- El agente aleatorio usa las semillas `0..19`.
+- Todos los parámetros están en `configs/default.yaml`.
+- PyTorch no garantiza reproducibilidad exacta en GPU; en CPU las corridas son deterministas en la práctica.
