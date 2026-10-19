@@ -19,7 +19,7 @@ El agente se entrena con datos históricos y se evalúa en un período no visto 
 
 Es importante dejar claridad de que el objetivo no es solo maximizar el retorno: se evalúan en conjunto **rendimiento, riesgo (drawdown) y costos**.
 
-> **Respuesta corta:** en el período de test (ene 2025 - oct 2026, mercado bajista), el agente final (`dd_light`, promedio de 3 semillas) ganó **+22,6 %** con un drawdown máximo de **-15,6 %**. En el mismo período, comprar y mantener perdió **-13,7 %** con un drawdown de **-53,7 %**. El resultado depende mucho de la semilla (ver sección 10).
+> **Respuesta corta:** en el período de test (ene 2025 - oct 2026, mercado bajista), el agente final (`dd_light`, promedio de 3 semillas) ganó **+28,4 %** con un drawdown máximo de **-14,4 %**. En el mismo período, comprar y mantener perdió **-13,6 %** con un drawdown de **-53,7 %**. El resultado depende mucho de la semilla (ver sección 10).
 
 > **Se recomienda revisar primero el EDA** (`notebooks/eda.ipynb`): ahí se justifican las features, las ventanas y el diseño de la recompensa.
 
@@ -162,7 +162,7 @@ $$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - 0{,}5\, \Delta DD_t^{+} - 0{,
 
 $$r_t = 100 \cdot \left[ \log\frac{V_{t+1}}{V_t} - 0{,}1\, \Delta DD_t^{+} - 0{,}001\, |w_t - w_{t-1}| \right]$$
 
-**Iteración del diseño:** La v1 operó en exceso (304 operaciones en validación). Por otro lado, v2 hizo *reward hacking*, o sea que se quedó en efectivo para no sufrir penalizaciones. 
+**Iteración del diseño:** La v1 operó en exceso (259 operaciones en promedio en validación, hasta 450 en una semilla). Por otro lado, v2 hizo *reward hacking*, o sea que se quedó en efectivo para no sufrir penalizaciones. 
 Si vemos v3, este redujo la penalización, pero siguió casi siempre fuera del mercado. Finalmente v4 suavizó la penalización hasta lograr un agente que entra en tramos de tendencia y paga pocos costos.
 
 ## 7. Algoritmo
@@ -215,11 +215,11 @@ Promedio de 3 semillas:
 | Estrategia | Retorno | Máx. DD | Sharpe | Operaciones | Costos | Exposición |
 |---|---|---|---|---|---|---|
 | Comprar y mantener | +120 % | -32,3 % | 1,76 | 1 | $100 | 100 % |
-| v1 `log_return` | +122 % | -21,8 % | 2,05 | 304 | $27.404 | 75 % |
+| v1 `log_return` | +115 % | -24,7 % | 2,02 | 259 | $21.496 | 75 % |
 | v2 `drawdown_penalty` | +12 % | -1,5 % | 1,81 | 12 | $901 | 0,1 % |
-| v3 `dd_turnover` | +12 % | -3,2 % | 1,53 | 20 | $1.378 | 0,3 % |
-| **v4 `dd_light`** | +69 % | **-11,6 %** | **2,06** | 48 | $4.169 | 23 % |
-| v4 `dd_light`, ensamble | +20 % | -13,4 % | 1,03 | 28 | $1.992 | 9 % |
+| v3 `dd_turnover` | +7 % | -1,6 % | 1,49 | 14 | $1.097 | 0,1 % |
+| **v4 `dd_light`** | +75 % | **-11,1 %** | **2,14** | 48 | $4.390 | 24 % |
+| v4 `dd_light`, ensamble | +16 % | -13,4 % | 0,83 | 29 | $2.057 | 10 % |
 
 ![Curva de capital - validación](results/equity_val.png)
 
@@ -228,7 +228,7 @@ Promedio de 3 semillas:
 Principales observaciones:
 - v2 y v3 hacen *reward hacking*: se quedan casi siempre en efectivo para evitar la penalización por drawdown (ver posiciones planas en el gráfico).
 - v1 iguala el retorno de comprar y mantener con menor drawdown, pero opera en exceso y paga costos altos.
-- v4 aprende una estrategia intermedia: entra en tramos de tendencia y sale en tramos laterales, con el mismo Sharpe que v1, la mitad de drawdown y un 85 % menos de costos.
+- v4 aprende una estrategia intermedia: entra en tramos de tendencia y sale en tramos laterales, con un Sharpe parecido al de v1 (2,14 frente a 2,02), menos de la mitad del drawdown y un 80 % menos de costos.
 - Vemos que el ensamble queda por debajo de las tres semillas individuales: al promediar los valores Q, las señales de entrada no coinciden y domina quedarse en efectivo.
 
 **Agente final (fijado antes de correr el test):** DQN con recompensa `dd_light`, 3 semillas, reportado como promedio y rango. **Criterio:** con Sharpe empatado frente a `log_return` en validación, se priorizan menor drawdown y menores costos, como pide el enunciado. El ensamble y las demás recompensas se reportan solo como comparación.
@@ -237,14 +237,14 @@ Principales observaciones:
 
 | Estrategia | Retorno | Máx. DD | Sharpe | Operaciones | Costos | Exposición |
 |---|---|---|---|---|---|---|
-| Comprar y mantener | -13,7 % | -53,7 % | 0,03 | 1 | $100 | 100 % |
-| Aleatorio (20 corridas) | -99,9 % | -99,9 % | — | 10.464 | $102.399 | 50 % |
-| 25 % fijo en BTC *(descriptivo)* | -3,4 % | -16,5 % | -0,13 | 1 | $25 | 24 %* |
-| `dd_light`, promedio 3 semillas | +22,6 % | -15,6 % | 0,48 | 42 | $2.798 | 25 % |
-| `dd_light` s0 | +56,2 % | -23,5 % | 0,96 | 48 | $3.237 | 58 % |
-| `dd_light` s1 | +0,2 % | -7,0 % | 0,05 | 24 | $1.352 | 1 % |
-| `dd_light` s2 | +11,3 % | -16,2 % | 0,44 | 54 | $3.806 | 16 % |
-| `dd_light`, ensamble | +1,7 % | -14,1 % | 0,14 | 32 | $1.982 | 11 % |
+| Comprar y mantener | -13,6 % | -53,7 % | 0,03 | 1 | $100 | 100 % |
+| Aleatorio (20 corridas) | -99,9 % | -99,9 % | — | 10.467 | $102.399 | 50 % |
+| 25 % fijo en BTC *(descriptivo)* | -3,4 % | -16,5 % | -0,12 | 1 | $25 | 24 %* |
+| `dd_light`, promedio 3 semillas | +28,4 % | -14,4 % | 0,65 | 40 | $2.706 | 25 % |
+| `dd_light` s0 | +68,7 % | -20,6 % | 1,11 | 45 | $3.047 | 57 % |
+| `dd_light` s1 | +5,2 % | -6,3 % | 0,42 | 21 | $1.266 | 1 % |
+| `dd_light` s2 | +11,4 % | -16,2 % | 0,44 | 54 | $3.806 | 16 % |
+| `dd_light`, ensamble | +1,1 % | -14,1 % | 0,12 | 31 | $1.980 | 11 % |
 
 \* El benchmark del 25 % compra una sola vez y no rebalancea, su exposición baja a medida que cae el precio de BTC. Se calculó **después** del test, solo con fines descriptivos, y no influyó en ninguna decisión.
 
@@ -255,10 +255,10 @@ Principales observaciones:
 ![Posiciones de la semilla s0 - test](results/positions_test.png)
 
 Interpretación:
-- **Le gana a comprar y mantener en las tres dimensiones:** retorno (+22,6 % frente a -13,7 %), riesgo (drawdown 3,5 veces menor) y Sharpe (0,48 frente a 0,03).
-- **La ventaja no es solo "estar poco invertido".** Con la misma exposición promedio (~25 %), el benchmark fijo pierde -3,4 % con un drawdown parecido (-16,5 %). El agente gana +22,6 %, lo que indica que elige cuándo entrar.
+- **Le gana a comprar y mantener en las tres dimensiones:** retorno (+28,4 % frente a -13,6 %), riesgo (drawdown 3,7 veces menor) y Sharpe (0,65 frente a 0,03).
+- **La ventaja no es solo "estar poco invertido".** Con la misma exposición promedio (~25 %), el benchmark fijo pierde -3,4 % con un drawdown parecido (-16,5 %). El agente gana +28,4 %, lo que indica que elige cuándo entrar.
 - **El comportamiento es consistente con validación:** en un mercado alcista (2024) rinde menos que comprar y mantener. En un mercado bajista (test) lo supera. Es una estrategia defensiva.
-- **Alta dependencia de la semilla:** el rango va de +0,2 % a +56,2 %. s0 explica la mayor parte del promedio y concentra su ganancia en pocas operaciones (entrada a fines de junio de 2026, mantenida en la subida de agosto). s1 casi no invierte (1 % de exposición), un comportamiento cercano al *reward hacking* de v2 y v3.
+- **Alta dependencia de la semilla:** el rango va de +5,2 % a +68,7 % (mediana +11,4 %). s0 explica la mayor parte del promedio y concentra su ganancia en pocas operaciones (entrada a fines de junio de 2026, mantenida en la subida de agosto). s1 casi no invierte (1 % de exposición), un comportamiento cercano al *reward hacking* de v2 y v3.
 - **El ensamble vuelve a fallar**, igual que en validación.
 - **El agente aleatorio pierde todo por costos** (más de 10.000 operaciones), lo que confirma que el costo de transacción está bien aplicado.
 
